@@ -69,8 +69,11 @@ jobs:
       - name: Run tests
         # Note: `wechat_qrcode` is a feature of the `opencv` crate, not
         # of `wxqr` itself. We enable it via `opencv/wechat_qrcode` so
-        # Cargo forwards it to the right package.
-        run: cargo test --release --features="opencv/wechat_qrcode" -- -v
+        # Cargo forwards it to the right package. We do NOT pass any
+        # args after `--` because the wxqr binary test harness would
+        # try to parse them as wxqr CLI args and fail with
+        # "Unrecognized option: 'v'".
+        run: cargo test --release --features="opencv/wechat_qrcode"
 
   build:
     name: build (${{ matrix.target }})
