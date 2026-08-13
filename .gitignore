@@ -1,0 +1,10 @@
+target/
+.release-artifacts/
+models/detect.prototxt
+models/detect.caffemodel
+models/sr.prototxt
+models/sr.caffemodel
+*.swp
+*.swo
+*~
+.DS_Store

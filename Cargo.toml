@@ -1,0 +1,61 @@
+[package]
+name = "wxqr"
+version = "0.1.0"
+authors = ["ljh-sh <lijunhao@x-cmd.com>"]
+edition = "2021"
+rust-version = "1.85"
+description = "Local QR decoder CLI powered by WeChatCV's CNN detector (OpenCV contrib)"
+readme = "README.md"
+homepage = "https://github.com/ljh-sh/wxqr"
+documentation = "https://github.com/ljh-sh/wxqr"
+license = "Apache-2.0"
+repository = "https://github.com/ljh-sh/wxqr"
+keywords = ["qr", "qrcode", "wechat", "opencv", "dnn"]
+categories = ["command-line-utilities", "multimedia", "computer-vision"]
+exclude = [
+    ".release-artifacts/",
+    ".github/",
+    ".x-cmd/",
+    "target/",
+    "models/",
+    "*.swp",
+    "*.swo",
+    "*~",
+    ".DS_Store",
+]
+
+[[bin]]
+name = "wxqr"
+path = "src/main.rs"
+
+[dependencies]
+# OpenCV with contrib modules. `wechat_qrcode` is the reason this project
+# exists; the rest of the contrib is disabled to keep build time short.
+# (`core` is always on — it is not a feature flag in opencv-rust.)
+opencv = { version = "0.100", default-features = false, features = [
+    "imgcodecs",
+    "imgproc",
+    "dnn",
+    "wechat_qrcode",
+] }
+# Image crate for additional format support / luminance conversion
+# (opencv itself can decode via imgcodecs; we add image crate for fallback
+#  paths and for stdio / raw RGB / RGBA input support).
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "bmp",
+    "tiff",
+] }
+anyhow = "1"
+tempfile = "3"
+dirs = "5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.test]
+panic = "unwind"

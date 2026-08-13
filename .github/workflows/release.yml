@@ -1,0 +1,147 @@
+# Tag-triggered release pipeline.
+#
+# v0.1 ships 4 targets: linux-musl (x86_64 + aarch64) + macOS
+# (x86_64 + aarch64). Windows is added in v0.2.
+#
+# Every release artifact is signed with `cosign sign-blob` and ships
+# a `*.sigstore.json` next to it.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write   # required for sigstore / cosign keyless signing
+  attestations: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            extra-deps: musl-tools
+            archive: tar.xz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            extra-deps: musl-tools,aarch64-linux-gnu-gcc
+            archive: tar.xz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.xz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.xz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compile deps (Linux musl)
+        if: matrix.extra-deps
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.extra-deps }}
+
+      - name: Cache OpenCV build dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/src/**/opencv-*
+            target/*/build/opencv-*
+            target/release/build/opencv-*
+          key: opencv-release-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.toml') }}
+          restore-keys: |
+            opencv-release-${{ runner.os }}-${{ matrix.target }}-
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }} --locked
+
+      - name: Strip + package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACT="wxqr-${{ matrix.target }}"
+          mkdir -p "$ARTIFACT/bin" "$ARTIFACT/lib"
+          # Linux: bundle the dynamic OpenCV libs next to the binary
+          # (RPATH=$ORIGIN/../lib) so the binary is portable.
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
+            cp "target/${{ matrix.target }}/release/wxqr" "$ARTIFACT/bin/"
+            # The exact set of shared libs depends on what opencv-rust
+            # linked. We copy everything matching libopencv_* and
+            # libworld.so.4 etc from target/${{ matrix.target }}/release/.
+            find "target/${{ matrix.target }}/release/" -maxdepth 1 \
+                 -name 'libopencv_*.so*' -o -name 'lib*.so.*' \
+                 | xargs -I{} cp -P {} "$ARTIFACT/lib/" 2>/dev/null || true
+          else
+            cp "target/${{ matrix.target }}/release/wxqr"* "$ARTIFACT/bin/"
+          fi
+          cp README.md README.cn.md ROADMAP.md NOTICE.md "$ARTIFACT/"
+          cp -r models "$ARTIFACT/"
+          # Windows-style archive for windows targets, tar.xz otherwise
+          if [[ "${{ matrix.archive }}" == "tar.xz" ]]; then
+            tar -cJf "$ARTIFACT.tar.xz" "$ARTIFACT"
+          else
+            (cd "$ARTIFACT" && zip -r "../$ARTIFACT.zip" .)
+          fi
+          sha256sum "$ARTIFACT.tar.xz" "$ARTIFACT.zip" 2>/dev/null | \
+              grep -v 'No such' > SHA256SUMS.txt || true
+          cat SHA256SUMS.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wxqr-${{ matrix.target }}
+          path: |
+            wxqr-${{ matrix.target }}.tar.xz
+            wxqr-${{ matrix.target }}.zip
+            SHA256SUMS.txt
+
+  release:
+    name: release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate combined SHA256SUMS
+        shell: bash
+        run: |
+          cd artifacts
+          cat */SHA256SUMS.txt | sort -u > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Sign with cosign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for f in artifacts/*.{tar.xz,zip}; do
+            [ -f "$f" ] || continue
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --bundle "${f}.sigstore.json" \
+              "$f"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/SHA256SUMS.txt
+            artifacts/**/*.tar.xz
+            artifacts/**/*.tar.xz.sig
+            artifacts/**/*.tar.xz.sigstore.json
+            artifacts/**/*.zip
+            artifacts/**/*.zip.sig
+            artifacts/**/*.zip.sigstore.json

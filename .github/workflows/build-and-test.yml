@@ -1,0 +1,148 @@
+# Build and test the wxqr binary on every push / PR.
+#
+# wxqr builds OpenCV from source via opencv-rust's contrib probe. That
+# is a 10-15 minute compile on cold cache. To keep CI under budget we:
+#   - cache the OpenCV source tree aggressively (the 1.5 GB build
+#     dir is the slowest thing on earth to rebuild)
+#   - ship only 4 platforms in v0.1 (linux-musl x86_64 + aarch64,
+#     macos x86_64 + aarch64); windows is in CI as
+#     continue-on-error and not released until v0.2.
+#   - keep one Linux gnu build for the `cargo test` job to avoid
+#     cross-compile noise around test execution.
+
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, gnu)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache OpenCV build dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/src/**/opencv-*
+            target/*/build/opencv-*
+          key: opencv-test-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --release --no-default-features --features="wechat_qrcode" -- -v
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.continue-on-error }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            extra-deps: musl-tools
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            extra-deps: musl-tools,aarch64-linux-gnu-gcc
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          # v0.1 ships only 4 targets; windows tracked here as
+          # continue-on-error for v0.2 promotion.
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+            continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compile deps (Linux musl)
+        if: matrix.extra-deps
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.extra-deps }}
+
+      - name: Cache OpenCV build dir (THIS IS THE BIG ONE)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/src/**/opencv-*
+            target/*/build/opencv-*
+            target/release/build/opencv-*
+          key: opencv-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.toml') }}
+          restore-keys: |
+            opencv-build-${{ runner.os }}-${{ matrix.target }}-
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }} --locked
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -e
+          EXT=""
+          if [[ "${{ matrix.os }}" == windows* ]]; then
+            EXT=".exe"
+          fi
+          BIN="target/${{ matrix.target }}/release/wxqr$EXT"
+          "$BIN" --version
+          # The bundled models must exist; fail fast if they were
+          # accidentally not committed.
+          test -f models/detect.prototxt
+          test -f models/detect.caffemodel
+          test -f models/sr.prototxt
+          test -f models/sr.caffemodel
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wxqr-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/wxqr*
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  model-attribution:
+    name: model MD5 verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify model MD5s match WeChatCV upstream
+        run: |
+          EXPECTED_DETECT_C="238e2b2d6f3c18d6c3a30de0c31e23cf"
+          EXPECTED_DETECT_P="6fb4976b32695f9f5c6305c19f12537d"
+          EXPECTED_SR_C="cbfcd60361a73beb8c583eea7e8e6664"
+          EXPECTED_SR_P="69db99927a70df953b471daaba03fbef"
+          test "$(md5sum models/detect.caffemodel | cut -d' ' -f1)" = "$EXPECTED_DETECT_C"
+          test "$(md5sum models/detect.prototxt | cut -d' ' -f1)"  = "$EXPECTED_DETECT_P"
+          test "$(md5sum models/sr.caffemodel | cut -d' ' -f1)"     = "$EXPECTED_SR_C"
+          test "$(md5sum models/sr.prototxt | cut -d' ' -f1)"      = "$EXPECTED_SR_P"
+          echo "All 4 model files match upstream WeChatCV."
