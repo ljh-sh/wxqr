@@ -34,14 +34,10 @@ use opencv::wechat_qrcode::WeChatQRCode;
 /// The four model files are embedded at compile time. This works around
 /// the OpenCV 4.x constraint that `WeChatQRCode::new` requires file paths,
 /// not in-memory blobs. (OpenCV 5.x will lift this — we upgrade then.)
-const DETECT_PROTOTXT: &[u8] =
-    include_bytes!("../models/detect.prototxt");
-const DETECT_MODEL: &[u8] =
-    include_bytes!("../models/detect.caffemodel");
-const SR_PROTOTXT: &[u8] =
-    include_bytes!("../models/sr.prototxt");
-const SR_MODEL: &[u8] =
-    include_bytes!("../models/sr.caffemodel");
+const DETECT_PROTOTXT: &[u8] = include_bytes!("../models/detect.prototxt");
+const DETECT_MODEL: &[u8] = include_bytes!("../models/detect.caffemodel");
+const SR_PROTOTXT: &[u8] = include_bytes!("../models/sr.prototxt");
+const SR_MODEL: &[u8] = include_bytes!("../models/sr.caffemodel");
 
 /// License text bundled next to the models so attribution stays intact
 /// even after `include_bytes!` pulls them in.
@@ -145,8 +141,8 @@ fn build_detector(scale_up: bool) -> Result<Detector> {
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut f = std::fs::File::create(path)
-        .with_context(|| format!("creating {}", path.display()))?;
+    let mut f =
+        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     f.write_all(bytes)
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())

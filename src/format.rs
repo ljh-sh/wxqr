@@ -31,12 +31,7 @@ pub fn emit_txt<W: Write>(w: &mut W, file: &Path, results: &[Decoded]) {
 /// With `--points`, each result gains an empty `"points": []` field
 /// (WeChatQRCode does not expose corner coordinates; the array is
 /// present for schema compatibility with zxing).
-pub fn emit_json<W: Write>(
-    w: &mut W,
-    file: &Path,
-    results: &[Decoded],
-    with_points: bool,
-) {
+pub fn emit_json<W: Write>(w: &mut W, file: &Path, results: &[Decoded], with_points: bool) {
     let f = file.display().to_string();
     let _ = write!(w, "[");
     write_str_obj(w, "file", &f);
@@ -60,12 +55,7 @@ pub fn emit_json<W: Write>(
 }
 
 /// `tsv` — three columns: `<file>\tQR_CODE\t<text>`.
-pub fn emit_tsv<W: Write>(
-    w: &mut W,
-    file: &Path,
-    results: &[Decoded],
-    _with_points: bool,
-) {
+pub fn emit_tsv<W: Write>(w: &mut W, file: &Path, results: &[Decoded], _with_points: bool) {
     let f = file.display().to_string();
     for r in results {
         if let Err(e) = writeln!(w, "{f}\tQR_CODE\t{}", tsv_escape(&r.text)) {
@@ -77,7 +67,9 @@ pub fn emit_tsv<W: Write>(
 }
 
 fn tsv_escape(s: &str) -> String {
-    s.replace('\t', "\\t").replace('\n', "\\n").replace('\r', "\\r")
+    s.replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn write_str_obj<W: Write>(w: &mut W, key: &str, val: &str) {

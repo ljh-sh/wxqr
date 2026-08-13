@@ -164,9 +164,7 @@ fn parse_dec(argv: &[String]) -> Result<Subcmd> {
                     .get(i + 1)
                     .ok_or_else(|| anyhow::anyhow!("--format requires a value"))?;
                 args.format = FormatKind::parse(v).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "unknown --format '{v}'; expected one of txt|json|tsv|yml"
-                    )
+                    anyhow::anyhow!("unknown --format '{v}'; expected one of txt|json|tsv|yml")
                 })?;
                 i += 2;
             }
@@ -208,8 +206,8 @@ fn parse_dec(argv: &[String]) -> Result<Subcmd> {
     }
 
     if let Some(src) = args.files_from.take() {
-        let content = read_files_from(&src)
-            .with_context(|| format!("reading --files-from '{src}'"))?;
+        let content =
+            read_files_from(&src).with_context(|| format!("reading --files-from '{src}'"))?;
         for line in content.split(if args.null_sep { '\0' } else { '\n' }) {
             if line.is_empty() {
                 continue;
@@ -280,13 +278,7 @@ fn run_dec(args: DecArgs) -> ExitCode {
     }
 }
 
-fn emit<W: Write>(
-    w: &mut W,
-    fmt: FormatKind,
-    path: &Path,
-    results: &[Decoded],
-    with_points: bool,
-) {
+fn emit<W: Write>(w: &mut W, fmt: FormatKind, path: &Path, results: &[Decoded], with_points: bool) {
     match fmt {
         FormatKind::Txt => emit_txt(w, path, results),
         FormatKind::Json => emit_json(w, path, results, with_points),
