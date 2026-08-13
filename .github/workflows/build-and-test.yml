@@ -81,7 +81,6 @@ jobs:
     # matrix is the slow path (10+ min on cold cache) and the test
     # job is the fast gate; we don't want the matrix to wait for it.
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.continue-on-error }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,19 +88,24 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             extra-deps: musl-tools,libclang-dev,clang
+            continue-on-error: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             extra-deps: musl-tools,aarch64-linux-gnu-gcc,libclang-dev,clang
+            continue-on-error: false
           - os: macos-13
             target: x86_64-apple-darwin
             extra-deps: llvm
+            continue-on-error: false
           - os: macos-latest
             target: aarch64-apple-darwin
             extra-deps: llvm
+            continue-on-error: false
           # v0.1 ships only 4 targets; windows tracked here as
           # continue-on-error for v0.2 promotion.
           - os: windows-latest
             target: x86_64-pc-windows-gnu
+            extra-deps: ""
             continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -110,13 +114,13 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cross-compile deps (Linux)
-        if: matrix.extra-deps && runner.os == 'Linux'
+        if: matrix.extra-deps != '' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.extra-deps }} libopencv-dev pkg-config
 
       - name: Install cross-compile deps (macOS)
-        if: matrix.extra-deps && runner.os == 'macOS'
+        if: matrix.extra-deps != '' && runner.os == 'macOS'
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           LIBCLANG_PATH: /opt/homebrew/opt/llvm/lib
