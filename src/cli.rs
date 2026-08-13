@@ -1,4 +1,9 @@
 //! CLI argument parsing + dispatch for `wxqr`.
+//!
+//! The repo path (`ljh-sh/wxqr`) already implies the subcommand is
+//! decode — there is no `enc` ever (WeChatQRCode is decode-only).
+//! So `wxqr <image>` works directly; `dec` is accepted as a deprecated
+//! alias for back-compat with the early design drafts.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,14 +11,14 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::decode::{DecodeOptions, Decoded};
+use crate::decode::{Decoded, DecodeOptions};
 use crate::format::{emit_json, emit_tsv, emit_txt};
 
 pub const HELP: &str = "\
 wxqr — local QR decoder (WeChatCV CNN)
 
 USAGE:
-    wxqr dec [OPTIONS] <IMAGE>...
+    wxqr [OPTIONS] <IMAGE>...
     wxqr --help | --version | --info
 
 Reads each IMAGE, runs the WeChatCV WeChatQRCode CNN detector + decoder,
@@ -22,10 +27,7 @@ least one image produced at least one result, 1 if all images were
 scanned but no QR codes were found, 2 on read / decode failure, 64 on
 usage error.
 
-This tool only decodes QR codes. It is designed as the fallback when
-generic detectors (e.g. zxing) miss damaged / blurred / small /
-reflective images. There is no `enc` subcommand — WeChatQRCode is a
-decode-only model.
+There is no `enc` subcommand — WeChatQRCode is a decode-only model.
 
 OPTIONS:
     -f, --format <FMT>   Output format: txt (default) | json | tsv
@@ -38,15 +40,18 @@ OPTIONS:
     -V, --version        Show version.
 
 EXAMPLES:
-    wxqr dec qr.png                              # one image
-    wxqr dec --format json img1.png img2.png     # batch
-    wxqr dec --points blurry.jpg                 # include corner coords
+    wxqr qr.png                              # one image
+    wxqr --format json img1.png img2.png     # batch
+    wxqr --points blurry.jpg                 # include corner coords
     find . -name '*.png' -print0 | \\
-        xargs -0 wxqr dec --null --files-from -
+        xargs -0 wxqr --null --files-from -
 ";
 
 #[derive(Debug)]
 enum Subcmd {
+    /// Direct call: `wxqr <image>...` (the canonical form).
+    Direct(DecArgs),
+    /// Deprecated `dec` subcommand alias (still accepted for back-compat).
     Dec(DecArgs),
     Help,
     Version,
@@ -98,7 +103,7 @@ pub fn run() -> ExitCode {
             println!("{}", env!("CARGO_PKG_DESCRIPTION"));
             ExitCode::SUCCESS
         }
-        Ok(Subcmd::Dec(args)) => run_dec(args),
+        Ok(Subcmd::Direct(args)) | Ok(Subcmd::Dec(args)) => run_dec(args),
         Err(e) => {
             eprintln!("wxqr: {e}");
             eprintln!();
@@ -112,20 +117,27 @@ fn parse_args(args: &[String]) -> Result<Subcmd> {
     if args.len() < 2 {
         return Ok(Subcmd::Help);
     }
+    // The first non-flag argument is either a subcommand (`dec`) or
+    // directly an image path. Subcommands are exactly the ones that
+    // begin with letters (no leading `-` or `/`); image paths almost
+    // always start with `./`, `/`, or contain a `.png`/`.jpg`/`.jpeg`.
+    // We use the simplest heuristic: if args[1] is a known word
+    // ("dec", "decode") treat it as a subcommand; otherwise treat
+    // the whole argv tail as direct image args.
     match args[1].as_str() {
         "-h" | "--help" => Ok(Subcmd::Help),
         "-V" | "--version" => Ok(Subcmd::Version),
         "--info" => Ok(Subcmd::Info),
-        "dec" | "decode" => parse_dec(&args[2..]),
         "enc" | "encode" => Err(anyhow!(
             "wxqr has no 'enc' subcommand — WeChatQRCode is decode-only by design. \
              Use ljh-sh/zxing for encode, or any qrcode / qrencode tool."
         )),
-        other => Err(anyhow!("unknown subcommand '{other}'")),
+        "dec" | "decode" => parse_dec(&args[2..]).map(Subcmd::Dec),
+        _ => parse_dec(&args[1..]).map(Subcmd::Direct),
     }
 }
 
-fn parse_dec(argv: &[String]) -> Result<Subcmd> {
+fn parse_dec(argv: &[String]) -> Result<DecArgs> {
     let mut args = DecArgs {
         format: FormatKind::Txt,
         scale_up: true,
@@ -140,8 +152,17 @@ fn parse_dec(argv: &[String]) -> Result<Subcmd> {
     while i < argv.len() {
         let a = &argv[i];
         match a.as_str() {
-            "-h" | "--help" => return Ok(Subcmd::Help),
-            "-V" | "--version" => return Ok(Subcmd::Version),
+            "-h" | "--help" => {
+                // We can't return Subcmd::Help from parse_dec (wrong
+                // return type). The caller handles --help/--version
+                // before invoking parse_dec.
+                return Err(anyhow!("internal: --help should be handled by parse_args"));
+            }
+            "-V" | "--version" => {
+                return Err(anyhow!(
+                    "internal: --version should be handled by parse_args"
+                ));
+            }
             "-f" | "--format" => {
                 let v = argv
                     .get(i + 1)
@@ -189,8 +210,8 @@ fn parse_dec(argv: &[String]) -> Result<Subcmd> {
     }
 
     if let Some(src) = args.files_from.take() {
-        let content =
-            read_files_from(&src).with_context(|| format!("reading --files-from '{src}'"))?;
+        let content = read_files_from(&src)
+            .with_context(|| format!("reading --files-from '{src}'"))?;
         for line in content.split(if args.null_sep { '\0' } else { '\n' }) {
             if line.is_empty() {
                 continue;
@@ -205,7 +226,7 @@ fn parse_dec(argv: &[String]) -> Result<Subcmd> {
         ));
     }
 
-    Ok(Subcmd::Dec(args))
+    Ok(args)
 }
 
 fn read_files_from(src: &str) -> Result<String> {
@@ -258,7 +279,13 @@ fn run_dec(args: DecArgs) -> ExitCode {
     }
 }
 
-fn emit<W: Write>(w: &mut W, fmt: FormatKind, path: &Path, results: &[Decoded], with_points: bool) {
+fn emit<W: Write>(
+    w: &mut W,
+    fmt: FormatKind,
+    path: &Path,
+    results: &[Decoded],
+    with_points: bool,
+) {
     match fmt {
         FormatKind::Txt => emit_txt(w, path, results),
         FormatKind::Json => emit_json(w, path, results, with_points),
