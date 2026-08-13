@@ -49,7 +49,7 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 anyhow = "1"
 tempfile = "3"
-dirs = "5"
+dirs = "6"
 
 [profile.release]
 lto = "thin"
