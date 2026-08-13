@@ -77,7 +77,9 @@ jobs:
 
   build:
     name: build (${{ matrix.target }})
-    needs: test
+    # No `needs: test` — build matrix runs in parallel with test. The
+    # matrix is the slow path (10+ min on cold cache) and the test
+    # job is the fast gate; we don't want the matrix to wait for it.
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.continue-on-error }}
     strategy:
