@@ -14,7 +14,6 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::OnceLock;
 
 use anyhow::{anyhow, Context, Result};
 
@@ -135,11 +134,11 @@ fn parse_args(args: &[String]) -> Result<Subcmd> {
         "-V" | "--version" => Ok(Subcmd::Version),
         "--info" => Ok(Subcmd::Info),
         "dec" | "decode" => parse_dec(&args[2..]),
-        "enc" | "encode" => Err(anyhow::anyhow!(
+        "enc" | "encode" => Err(anyhow!(
             "wxqr has no 'enc' subcommand — WeChatQRCode is decode-only by design. \
              Use ljh-sh/zxing for encode, or any qrcode / qrencode tool."
         )),
-        other => Err(anyhow::anyhow!("unknown subcommand '{other}'")),
+        other => Err(anyhow!("unknown subcommand '{other}'")),
     }
 }
 
@@ -295,7 +294,3 @@ fn emit<W: Write>(
     }
     let _ = w.flush();
 }
-
-// silence dead-code lints for OnceLock if unused in some build configs
-#[allow(dead_code)]
-fn _typecheck(_: &OnceLock<()>) {}

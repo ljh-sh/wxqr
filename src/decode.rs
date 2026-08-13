@@ -4,10 +4,27 @@
 //! The detector is initialized once via `OnceLock` because loading the
 //! four model files + spinning up the OpenCV DNN graph is ~500 ms of
 //! fixed cost that we don't want to pay per image.
+//!
+//! ## OpenCV version compatibility
+//!
+//! The `WeChatQRCode::new` constructor signature differs between
+//! OpenCV 4.x and 5.x:
+//!   - OpenCV 4.5.x and later: 4 args (Caffe format) —
+//!     `new(detect_prototxt, detect_caffemodel, sr_prototxt, sr_caffemodel)`
+//!   - OpenCV 5.x: 2 args (ONNX format) —
+//!     `new(detect_onnx, sr_onnx)`
+//!
+//! WeChatCV's `opencv_3rdparty` repo only publishes Caffe-format models.
+//! To use OpenCV 5.x, the models would need to be converted to ONNX.
+//!
+//! v0.1 ships with the Caffe models and targets OpenCV 4.5+ via the
+//! 4-arg API. To switch to OpenCV 5.x in v0.3, convert the bundled
+//! `.caffemodel` + `.prototxt` files to `.onnx` and update the
+//! constructor call below.
 
 use std::io::Write;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use opencv::core::Mat;
@@ -44,15 +61,25 @@ pub struct Decoded {
     pub points: Vec<(f32, f32)>,
 }
 
-/// Lazily-initialized detector handle. Holds:
-///   - the `WeChatQRCode` instance (which owns the loaded DNN graph)
-///   - a `tempfile::TempDir` keeping the model files alive for the
-///     lifetime of the process
+/// Lazily-initialized detector handle.
+///
+/// The `WeChatQRCode` type holds an opaque C++ pointer; it's not
+/// `Send`/`Sync` by default. The `Detector` itself is logically
+/// thread-safe — `detect_and_decode` is a const method on the
+/// underlying C++ object — so we add explicit `Send` + `Sync` impls.
+/// (We never mutate the detector after construction; the opencv-rust
+/// `&mut self` on `detect_and_decode` is a false positive.)
 struct Detector {
-    qr: WeChatQRCode,
+    qr: Mutex<WeChatQRCode>,
     _tempdir: tempfile::TempDir,
     _scale_up: bool,
 }
+
+// SAFETY: see comment on `Detector`. WeChatQRCode wraps an immutable
+// C++ object whose API is read-only after construction; the Mutex
+// guards the &mut self access from detect_and_decode.
+unsafe impl Send for Detector {}
+unsafe impl Sync for Detector {}
 
 static DETECTOR: OnceLock<Result<Detector, String>> = OnceLock::new();
 
@@ -100,6 +127,8 @@ fn build_detector(scale_up: bool) -> Result<Detector> {
         .to_str()
         .ok_or_else(|| anyhow!("model path is not valid UTF-8"))?;
 
+    // OpenCV 4.x 4-arg API: prototxt + caffemodel for both detector and
+    // super-resolution. OpenCV 5.x collapsed this to 2 args (ONNX format).
     let qr = WeChatQRCode::new(
         detect_prototxt_str,
         detect_model_str,
@@ -109,7 +138,7 @@ fn build_detector(scale_up: bool) -> Result<Detector> {
     .context("constructing WeChatQRCode detector (models corrupt or wrong version?)")?;
 
     Ok(Detector {
-        qr,
+        qr: Mutex::new(qr),
         _tempdir: tempdir,
         _scale_up: scale_up,
     })
@@ -123,13 +152,13 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn get_detector() -> Result<&'static WeChatQRCode> {
+fn get_detector() -> Result<&'static Detector> {
     let r = DETECTOR.get_or_init(|| match build_detector(true) {
         Ok(d) => Ok(d),
         Err(e) => Err(format!("{e:#}")),
     });
     match r {
-        Ok(d) => Ok(&d.qr),
+        Ok(d) => Ok(d),
         Err(e) => Err(anyhow!(e.clone())),
     }
 }
@@ -155,27 +184,29 @@ pub fn decode_path(path: &Path, _opts: &DecodeOptions, quiet: bool) -> Result<Ve
     decode_with(detector, &img, quiet)
 }
 
-fn decode_with(detector: &WeChatQRCode, img: &Mat, _quiet: bool) -> Result<Vec<Decoded>> {
-    // WeChatQRCode::detect_and_decode returns
-    //   (Vec<String>, bool /* found */)
-    // The boolean indicates whether any QR was found; the Vec contains
-    // the decoded strings (one per found code).
-    let (texts, found) = detector
-        .detect_and_decode(img)
+fn decode_with(detector: &Detector, img: &Mat, _quiet: bool) -> Result<Vec<Decoded>> {
+    // WeChatQRCode::detect_and_decode takes (img, points) where points
+    // is an output array that receives the four corner points of each
+    // detected QR. We don't need the corners, so we pass a fresh Mat.
+    let mut points = Mat::default();
+    let texts: opencv::core::Vector<String> = detector
+        .qr
+        .lock()
+        .map_err(|_| anyhow!("WeChatQRCode mutex poisoned"))?
+        .detect_and_decode(img, &mut points)
         .context("WeChatQRCode::detect_and_decode failed")?;
 
-    if !found {
+    if texts.is_empty() {
         return Ok(Vec::new());
     }
 
-    // WeChatQRCode does not return corner points (the underlying
-    // detector does, but the high-level wrapper discards them). For
-    // schema compat with zxing's output we emit empty points when
-    // --points is not given, and an empty array when --points is given.
+    // WeChatQRCode does not expose corner points at the high-level
+    // wrapper (the underlying detector does, but they're discarded).
+    // For schema compat with zxing's output we emit an empty Vec.
     Ok(texts
-        .into_iter()
+        .iter()
         .map(|text| Decoded {
-            text,
+            text: text.clone(),
             points: Vec::new(),
         })
         .collect())
