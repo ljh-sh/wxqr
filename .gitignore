@@ -1,10 +1,14 @@
 target/
 .release-artifacts/
-models/detect.prototxt
-models/detect.caffemodel
-models/sr.prototxt
-models/sr.caffemodel
 *.swp
 *.swo
 *~
 .DS_Store
+
+# Models are committed (1 MB total) so CI doesn't need a fetch step.
+# See models/LICENSE for the upstream MIT attribution.
+# models/detect.prototxt
+# models/detect.caffemodel
+# models/sr.prototxt
+# models/sr.caffemodel
+# models/LICENSE

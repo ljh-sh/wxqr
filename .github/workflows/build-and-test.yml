@@ -41,7 +41,10 @@ jobs:
           key: opencv-test-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: cargo test --release --no-default-features --features="wechat_qrcode" -- -v
+        # Note: `wechat_qrcode` is a feature of the `opencv` crate, not
+        # of `wxqr` itself. We enable it via `opencv/wechat_qrcode` so
+        # Cargo forwards it to the right package.
+        run: cargo test --release --features="opencv/wechat_qrcode" -- -v
 
   build:
     name: build (${{ matrix.target }})
