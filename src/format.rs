@@ -33,7 +33,7 @@ pub fn emit_txt<W: Write>(w: &mut W, file: &Path, results: &[Decoded]) {
 /// present for schema compatibility with zxing).
 pub fn emit_json<W: Write>(w: &mut W, file: &Path, results: &[Decoded], with_points: bool) {
     let f = file.display().to_string();
-    let _ = write!(w, "[");
+    let _ = write!(w, "[{{");
     write_str_obj(w, "file", &f);
     let _ = write!(w, ", \"results\": [");
     for (i, r) in results.iter().enumerate() {
