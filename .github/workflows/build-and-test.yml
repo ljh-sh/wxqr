@@ -9,6 +9,10 @@
 #     continue-on-error and not released until v0.2.
 #   - keep one Linux gnu build for the `cargo test` job to avoid
 #     cross-compile noise around test execution.
+#
+# All jobs that touch opencv-rust's build.rs need libclang + LLVM:
+#   - Linux: `apt install libclang-dev clang`
+#   - macOS: xcode-select --install (or `brew install llvm`)
 
 name: build-and-test
 
@@ -32,6 +36,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libclang (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang
+
+      - name: Install libclang (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+
       - name: Cache OpenCV build dir
         uses: actions/cache@v4
         with:
@@ -39,7 +54,9 @@ jobs:
             ~/.cargo/registry/src/**/opencv-*
             target/*/build/opencv-*
           key: opencv-test-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+
       - uses: Swatinem/rust-cache@v2
+
       - name: Run tests
         # Note: `wechat_qrcode` is a feature of the `opencv` crate, not
         # of `wxqr` itself. We enable it via `opencv/wechat_qrcode` so
@@ -57,14 +74,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            extra-deps: musl-tools
+            extra-deps: musl-tools,libclang-dev,clang
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            extra-deps: musl-tools,aarch64-linux-gnu-gcc
+            extra-deps: musl-tools,aarch64-linux-gnu-gcc,libclang-dev,clang
           - os: macos-13
             target: x86_64-apple-darwin
+            extra-deps: llvm
           - os: macos-latest
             target: aarch64-apple-darwin
+            extra-deps: llvm
           # v0.1 ships only 4 targets; windows tracked here as
           # continue-on-error for v0.2 promotion.
           - os: windows-latest
@@ -76,9 +95,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compile deps (Linux musl)
-        if: matrix.extra-deps
+      - name: Install cross-compile deps (Linux)
+        if: matrix.extra-deps && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.extra-deps }}
+
+      - name: Install cross-compile deps (macOS)
+        if: matrix.extra-deps && runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install ${{ matrix.extra-deps }}
 
       - name: Cache OpenCV build dir (THIS IS THE BIG ONE)
         uses: actions/cache@v4
@@ -127,11 +152,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Install libclang (for clippy's opencv-rust probe)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang
       - uses: Swatinem/rust-cache@v2
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # Clippy drives the full type-check of the wxqr bin, which pulls in
+        # opencv-rust → clang-sys → libclang. Install libclang first or
+        # the cargo clippy invocation panics with "couldn't find any
+        # valid shared libraries matching: ['libclang.so', ...]".
+        run: cargo clippy --all-targets --features="opencv/wechat_qrcode" -- -D warnings
       - name: cargo deny
         # v2 uses a cargo-deny release that supports Cargo.lock v4
         # (Cargo 1.93+ default). The v1 image ships an older cargo
