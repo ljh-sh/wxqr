@@ -22,35 +22,21 @@ fn txt_emits_one_line_per_detection() {
 }
 
 #[test]
-fn json_emits_valid_shape() {
+fn json_emits_valid_shape_with_empty_points_always() {
+    // WeChatQRCode does not expose corner points at the high-level
+    // wrapper, so the array is always empty even when --points would
+    // have been set. The field is present for schema compatibility
+    // with ljh-sh/zxing.
     let mut buf = Vec::new();
     let results = vec![Decoded {
         text: "https://x-cmd.com".to_string(),
         points: vec![],
     }];
-    wxqr::emit_json(&mut buf, Path::new("qr.png"), &results, false);
+    wxqr::emit_json(&mut buf, Path::new("qr.png"), &results);
     let s = String::from_utf8(buf).unwrap();
     assert_eq!(
         s,
-        "[{\"file\": \"qr.png\", \"results\": [{\"format\": \"QR_CODE\", \"text\": \"https://x-cmd.com\"}]}]\n"
-    );
-}
-
-#[test]
-fn json_with_points_emits_empty_array() {
-    // WeChatQRCode does not expose corner points at the high-level
-    // wrapper, so the array is always empty even when --points is set.
-    // This preserves schema compatibility with ljh-sh/zxing.
-    let mut buf = Vec::new();
-    let results = vec![Decoded {
-        text: "hi".to_string(),
-        points: vec![],
-    }];
-    wxqr::emit_json(&mut buf, Path::new("qr.png"), &results, true);
-    let s = String::from_utf8(buf).unwrap();
-    assert!(
-        s.contains("\"points\": []"),
-        "expected empty points array in {s:?}"
+        "[{\"file\": \"qr.png\", \"results\": [{\"format\": \"QR_CODE\", \"text\": \"https://x-cmd.com\", \"points\": []}]}]\n"
     );
 }
 
@@ -61,7 +47,7 @@ fn tsv_escapes_tabs_and_newlines_in_text_field() {
         text: "col1\tcol2\tcol3".to_string(),
         points: vec![],
     }];
-    wxqr::emit_tsv(&mut buf, Path::new("qr.png"), &results, false);
+    wxqr::emit_tsv(&mut buf, Path::new("qr.png"), &results);
     let s = String::from_utf8(buf).unwrap();
 
     let mut cols = s.split('\t');

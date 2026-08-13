@@ -1,8 +1,8 @@
 //! Output formatters: txt, json, tsv.
 //!
 //! Output schema is byte-compatible with `ljh-sh/zxing`'s JSON output
-//! (`{"format": "QR_CODE", "text": "..."}`) so that an outer
-//! dispatcher (`x qr dec`) can fan out to either backend without
+//! (`{"format": "QR_CODE", "text": "...", "points": [...]}`) so that
+//! an outer dispatcher can fan out to either backend without
 //! per-result special-casing.
 
 use std::io::Write;
@@ -25,13 +25,13 @@ pub fn emit_txt<W: Write>(w: &mut W, file: &Path, results: &[Decoded]) {
 
 /// `json` — one entry per file:
 /// ```json
-/// [{"file": "qr.png", "results": [{"format": "QR_CODE", "text": "https://x-cmd.com"}]}]
+/// [{"file": "qr.png", "results": [{"format": "QR_CODE", "text": "https://x-cmd.com", "points": []}]}]
 /// ```
 ///
-/// With `--points`, each result gains an empty `"points": []` field
-/// (WeChatQRCode does not expose corner coordinates; the array is
-/// present for schema compatibility with zxing).
-pub fn emit_json<W: Write>(w: &mut W, file: &Path, results: &[Decoded], with_points: bool) {
+/// The `points` field is always emitted (empty array — WeChatQRCode
+/// does not expose corner coordinates at the high-level wrapper).
+/// Kept in the schema for byte-compatibility with `ljh-sh/zxing`.
+pub fn emit_json<W: Write>(w: &mut W, file: &Path, results: &[Decoded]) {
     let f = file.display().to_string();
     let _ = write!(w, "[{{");
     write_str_obj(w, "file", &f);
@@ -44,18 +44,16 @@ pub fn emit_json<W: Write>(w: &mut W, file: &Path, results: &[Decoded], with_poi
         write_str_obj(w, "format", "QR_CODE");
         let _ = write!(w, ", ");
         write_str_obj(w, "text", &r.text);
-        if with_points {
-            // WeChatQRCode doesn't expose points; emit empty array for
-            // schema compat. Future versions of OpenCV may expose them.
-            let _ = write!(w, ", \"points\": []");
-        }
+        let _ = write!(w, ", \"points\": []");
         let _ = write!(w, "}}");
     }
     let _ = writeln!(w, "]}}]");
 }
 
 /// `tsv` — three columns: `<file>\tQR_CODE\t<text>`.
-pub fn emit_tsv<W: Write>(w: &mut W, file: &Path, results: &[Decoded], _with_points: bool) {
+/// Points are not emitted in TSV (no clean column shape for an
+/// arbitrary-length array); JSON is the format that carries them.
+pub fn emit_tsv<W: Write>(w: &mut W, file: &Path, results: &[Decoded]) {
     let f = file.display().to_string();
     for r in results {
         if let Err(e) = writeln!(w, "{f}\tQR_CODE\t{}", tsv_escape(&r.text)) {

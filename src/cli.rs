@@ -19,6 +19,7 @@ wxqr — local QR decoder (WeChatCV CNN)
 
 USAGE:
     wxqr [OPTIONS] <IMAGE>...
+    wxqr [decode] [OPTIONS] <IMAGE>...
     wxqr --help | --version | --info
 
 Reads each IMAGE, runs the WeChatCV WeChatQRCode CNN detector + decoder,
@@ -32,7 +33,6 @@ There is no `enc` subcommand — WeChatQRCode is a decode-only model.
 OPTIONS:
     -f, --format <FMT>   Output format: txt (default) | json | tsv
         --no-scale-up    Disable super-resolution pass (faster on clean images)
-        --points         Include corner points in JSON / TSV output
     -0, --null           Treat input as NUL-separated path list
         --files-from <P> Read paths from a file ('-' for stdin); one per line
         -q, --quiet       Suppress per-file stderr error logs
@@ -42,7 +42,6 @@ OPTIONS:
 EXAMPLES:
     wxqr qr.png                              # one image
     wxqr --format json img1.png img2.png     # batch
-    wxqr --points blurry.jpg                 # include corner coords
     find . -name '*.png' -print0 | \\
         xargs -0 wxqr --null --files-from -
 ";
@@ -62,7 +61,6 @@ enum Subcmd {
 struct DecArgs {
     format: FormatKind,
     scale_up: bool,
-    points: bool,
     null_sep: bool,
     files_from: Option<String>,
     quiet: bool,
@@ -118,20 +116,15 @@ fn parse_args(args: &[String]) -> Result<Subcmd> {
         return Ok(Subcmd::Help);
     }
     // The first non-flag argument is either a subcommand (`dec`) or
-    // directly an image path. Subcommands are exactly the ones that
-    // begin with letters (no leading `-` or `/`); image paths almost
-    // always start with `./`, `/`, or contain a `.png`/`.jpg`/`.jpeg`.
-    // We use the simplest heuristic: if args[1] is a known word
-    // ("dec", "decode") treat it as a subcommand; otherwise treat
-    // the whole argv tail as direct image args.
+    // directly an image path. Subcommands are exactly the words that
+    // begin with letters and are not paths; we use the simplest
+    // heuristic: if args[1] is a known word ("dec", "decode") treat
+    // it as a subcommand; otherwise treat the whole argv tail as
+    // direct image args.
     match args[1].as_str() {
         "-h" | "--help" => Ok(Subcmd::Help),
         "-V" | "--version" => Ok(Subcmd::Version),
         "--info" => Ok(Subcmd::Info),
-        "enc" | "encode" => Err(anyhow!(
-            "wxqr has no 'enc' subcommand — WeChatQRCode is decode-only by design. \
-             Use ljh-sh/zxing for encode, or any qrcode / qrencode tool."
-        )),
         "dec" | "decode" => parse_dec(&args[2..]).map(Subcmd::Dec),
         _ => parse_dec(&args[1..]).map(Subcmd::Direct),
     }
@@ -141,7 +134,6 @@ fn parse_dec(argv: &[String]) -> Result<DecArgs> {
     let mut args = DecArgs {
         format: FormatKind::Txt,
         scale_up: true,
-        points: false,
         null_sep: false,
         files_from: None,
         quiet: false,
@@ -153,15 +145,12 @@ fn parse_dec(argv: &[String]) -> Result<DecArgs> {
         let a = &argv[i];
         match a.as_str() {
             "-h" | "--help" => {
-                // We can't return Subcmd::Help from parse_dec (wrong
-                // return type). The caller handles --help/--version
-                // before invoking parse_dec.
-                return Err(anyhow!("internal: --help should be handled by parse_args"));
+                println!("{HELP}");
+                std::process::exit(0);
             }
             "-V" | "--version" => {
-                return Err(anyhow!(
-                    "internal: --version should be handled by parse_args"
-                ));
+                println!("wxqr {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
             }
             "-f" | "--format" => {
                 let v = argv
@@ -174,10 +163,6 @@ fn parse_dec(argv: &[String]) -> Result<DecArgs> {
             }
             "--no-scale-up" | "--no_scale_up" => {
                 args.scale_up = false;
-                i += 1;
-            }
-            "--points" => {
-                args.points = true;
                 i += 1;
             }
             "-0" | "--null" => {
@@ -261,7 +246,11 @@ fn run_dec(args: DecArgs) -> ExitCode {
                     continue;
                 }
                 had_any = true;
-                emit(&mut stdout, args.format, path, &results, args.points);
+                // `points` is always emitted in the output. WeChatQRCode
+                // does not expose corner points in its high-level wrapper,
+                // so the array is always empty here — but the schema stays
+                // byte-compatible with zxing's output regardless.
+                emit(&mut stdout, args.format, path, &results);
             }
             Err(e) => {
                 if !args.quiet {
@@ -279,17 +268,11 @@ fn run_dec(args: DecArgs) -> ExitCode {
     }
 }
 
-fn emit<W: Write>(
-    w: &mut W,
-    fmt: FormatKind,
-    path: &Path,
-    results: &[Decoded],
-    with_points: bool,
-) {
+fn emit<W: Write>(w: &mut W, fmt: FormatKind, path: &Path, results: &[Decoded]) {
     match fmt {
         FormatKind::Txt => emit_txt(w, path, results),
-        FormatKind::Json => emit_json(w, path, results, with_points),
-        FormatKind::Tsv => emit_tsv(w, path, results, with_points),
+        FormatKind::Json => emit_json(w, path, results),
+        FormatKind::Tsv => emit_tsv(w, path, results),
     }
     let _ = w.flush();
 }

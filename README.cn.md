@@ -9,9 +9,12 @@ CNN 模型解码图像中的二维码 —— 与 OpenCV `cv::wechat_qrcode::WeCh
 极小、透视畸变的图像。
 
 ```
-$ wxqr dec photo-of-real-world-qr.jpg
+$ wxqr photo-of-real-world-qr.jpg
 photo-of-real-world-qr.jpg    QR_CODE   https://x-cmd.com
 ```
+
+`decode` 是默认子命令（仓库路径已经暗示了 decode）—— `wxqr <img>` 直接工作，
+不用打 `dec`。显式形式 `wxqr decode <img>` 也接受。
 
 **没有 `enc` 子命令。** WeChatQRCode 模型设计上就是 decode-only。
 需要 QR 编码请用 [`ljh-sh/zxing`](../zxing)、`x qr enc`、`qrencode`
@@ -19,12 +22,28 @@ photo-of-real-world-qr.jpg    QR_CODE   https://x-cmd.com
 
 ## 为什么
 
-通用 QR 解码器（zxing、OpenCV 自带的 `QRCodeDetector`、`x qr webdec`
-使用的 `api.qrserver.com` web 服务）在真实世界图像上经常翻车 —— 商品包装
-照片、手机屏幕、投影仪显示。WeChatCV 模型训练于数亿张此类图像，是噪声
-输入下当前最强的解码器。
+通用 QR 解码器（`ljh-sh/zxing`、OpenCV 自带的 `QRCodeDetector`、
+`api.qrserver.com` web 服务）在真实世界图像上经常翻车 —— 商品包装照片、
+手机屏幕、投影仪显示。WeChatCV 模型训练于数亿张此类图像，是噪声输入下
+当前最强的解码器。
 
 `wxqr` 让 `x qr dec` 在本地有一道兜底，能处理这些场景而不向第三方泄露图片。
+
+## 为什么和 `ljh-sh/zxing` 分开
+
+我们考虑过把 `wxqr` 合并进 `ljh-sh/zxing`（一个 CLI 同时含两个解码器）。
+最终选择分开是 deliberate 的：
+
+- **构建成本** —— 加 WeChatCV 模型层会让 `zxing` 的 binary 从 1.7 MB
+  膨胀到 ~10 MB，并拉入 OpenCV 作为运行时依赖。大多数调用方不需要
+  CNN 解码，不该为此付费。
+- **冷启动成本** —— CNN 模型加载每次进程 ~500 ms。紧循环里每张图
+  调 `wxqr` 很浪费；`zxing` 才是易例的默认选择。
+- **可选依赖** —— `wxqr` 只在易例解码器失败时有用。`x qr dec` 调度器可以
+  先调 `zxing`，需要时再 fallback 到 `wxqr`（见 [x-cmd/x-cmd#467](https://github.com/x-cmd/x-cmd/issues/467)）。
+
+如果想要一个工具通吃两者，用上面的调度器。`wxqr` 作为独立 binary 是
+硬图批处理场景的正确选择（例如批量处理 QR 贴纸照片）。
 
 ## 安装
 
@@ -48,13 +67,11 @@ Windows deferred 到 v0.2。
 ## 用法
 
 ```
-wxqr dec [OPTIONS] <IMAGE>...
+wxqr [OPTIONS] <IMAGE>...
 
 OPTIONS:
     -f, --format <FMT>   输出格式: txt (默认) | json | tsv
-        --no-scale-up    关闭超分预 pass
-        --points         JSON/TSV 输出包含角点坐标
-                         (当前为空数组 — WeChatQRCode 不暴露坐标)
+        --no-scale-up    关闭超分预 pass（清洁图加速）
     -0, --null           输入路径用 NUL 分隔
         --files-from <P> 从文件 (或 stdin '-') 读取路径列表
         -q, --quiet       抑制 per-file stderr 错误日志
@@ -62,25 +79,27 @@ OPTIONS:
     -V, --version        显示版本
 ```
 
+JSON 输出里 `points` 字段总是出现（永远是 `[]` —— `WeChatQRCode` 高级
+wrapper 不暴露 corner coordinates；这个字段保留是为了和 `ljh-sh/zxing`
+字节兼容）。
+
 ### 示例
 
 ```sh
 # 解码硬图
-wxqr dec photo-of-qr.jpg
+wxqr photo-of-qr.jpg
 
 # 批量 + JSON 输出
-wxqr dec --format json img1.jpg img2.png img3.webp
-
-# 角点坐标 (当前为空数组；未来 OpenCV 版本可能暴露)
-wxqr dec --format json --points blurry.png
+wxqr --format json img1.jpg img2.png img3.webp
 
 # NUL 分隔文件列表 (来自 find/xargs)
-find . -name '*.jpg' -print0 | xargs -0 wxqr dec --null --files-from -
+find . -name '*.jpg' -print0 | xargs -0 wxqr --null --files-from -
+
+# 干净图跳过超分 pass
+wxqr --no-scale-up clean-photo.jpg
 ```
 
 ### 输出格式
-
-输出 schema 与 `ljh-sh/zxing` 字节兼容:
 
 **txt**:
 ```
@@ -89,7 +108,7 @@ photo.jpg   QR_CODE   https://x-cmd.com
 
 **json**:
 ```json
-[{"file": "photo.jpg", "results": [{"format": "QR_CODE", "text": "https://x-cmd.com"}]}]
+[{"file": "photo.jpg", "results": [{"format": "QR_CODE", "text": "https://x-cmd.com", "points": []}]}]
 ```
 
 **tsv**:
@@ -108,9 +127,9 @@ photo.jpg   QR_CODE   https://x-cmd.com
 
 ## 权衡
 
-`wxqr` 比 `zxing` 重:
+`wxqr` 比 `ljh-sh/zxing` 重:
 
-- 主 binary 5-10 MB (OpenCV DNN runtime)
+- 主 binary ~10 MB (OpenCV DNN runtime)
 - Linux 上 ~50 MB bundled `libopencv` 共享库
 - ~500 ms 一次性启动成本加载四个模型
 
@@ -132,7 +151,7 @@ cargo build --release
 礼貌），但 `models/` 目录必须在 build 时存在，内容齐全：
 
 ```sh
-./scripts/update-models.sh wechat_qrcode-2023-07-23
+./scripts/update-models.sh
 ```
 
 (脚本钉死模型版本；bump 是 deliberate 维护步骤，要走 release notes —
@@ -147,18 +166,24 @@ cargo zigbuild --release --target x86_64-apple-darwin
 cargo zigbuild --release --target aarch64-apple-darwin
 ```
 
+macOS 本地测试需要 `brew install opencv@4`（opencv@4 有 26 个 transitive
+依赖，opencv-rust build pipeline 通过 pkg-config 全部拉入）。CI 在 Linux
+用 `apt install libopencv-dev` 打包一切；CI 是规范的全量验证路径。
+
 ## 架构
 
 ```
 src/
-├── main.rs       — CLI 入口，手写参数解析
-├── decode.rs     — 用 opencv::imgcodecs 开图，
-│                   OnceLock 构造一次 WeChatQRCode，
-│                   调用 detect_and_decode
-└── format.rs     — txt / json / tsv 输出，与 zxing schema 字节兼容
+├── main.rs       — CLI 入口（薄壳，调 wxqr::run()）
+├── lib.rs        — pub mod cli / decode / format
+├── cli.rs        — 手写参数解析 + 分发
+├── decode.rs     — OnceLock 构造 WeChatQRCode 检测器
+│                   （Mutex<WeChatQRCode> 包在 OnceLock 里）；
+│                   include_bytes! 的 4 个模型首次解码时
+│                   写到 tempfile::TempDir
+└── format.rs     — txt / json / tsv 全手写
+                    (不依赖 serde / json crate)
 ```
-
-CLI 故意避开 `clap` / `serde`，保持 binary 小、依赖面可审计。
 
 ### 为什么把模型文件嵌入 binary
 
@@ -181,10 +206,31 @@ Apache-2.0。见 [LICENSE](LICENSE)。
 - OpenCV + opencv-rust (Apache-2.0 / MIT)
 - `image` crate (MIT OR Apache-2.0)
 
-## 相关
+## 相关项目
 
-- [`ljh-sh/zxing`](../zxing) — 兄弟项目。`x qr dec` 调度层先试 zxing
-  (快、小、支持 1D)，空结果才 fallback 到 wxqr。
-- `x-bash/qr` — 用这两个 binary 的 x-cmd 模块。
+- [`ljh-sh/zxing`](../zxing) — 兄弟项目，是 QR / 1D 条码解码
+  易例 90% 的 **快路径**。先用 `zxing`，它返回 exit 1 时 fallback
+  到 `wxqr`。调度器在 `x-bash/qr`（跟踪于
+  [x-cmd/x-cmd#467](https://github.com/x-cmd/x-cmd/issues/467)）。
 - [`mneme/wxqr-design`](https://github.com/ljh-sh/mneme/blob/main/wxqr-design/README.md)
   — 本项目设计 rationale、决策日志、roadmap。
+
+### wxqr vs zxing 对比
+
+| | `ljh-sh/zxing` | `ljh-sh/wxqr` (本项目) |
+|---|---|---|
+| 算法 | ZXing (rxing) — 纯 Rust | WeChatCV WeChatQRCode — CNN (OpenCV) |
+| 子命令 | `dec`（强制） | `decode` 默认（`wxqr <img>` 直接工作） |
+| 格式覆盖 | QR + 1D (EAN/UPC/Code 128/…) | 仅 QR |
+| 模型 | 无 —— 算法自身 | ~1 MB WeChatCV Caffe 模型内嵌 |
+| 原生依赖 | 无 | OpenCV + bundled .dylib/.so |
+| Binary 大小 | ~1.7 MB (linux-musl) | ~10 MB + ~50 MB bundled libopencv |
+| 冷启动开销 | 无 | ~500 ms（模型加载） |
+| 典型解码速度 | ~30 ms / 张 | ~30-300 ms / 张（CNN） |
+| 最擅长场景 | 清洁 / 标准条码 | 模糊、反光、褶皱、极小、低对比度 |
+
+两个后端输出 **字节兼容的 JSON**，调度层可以无差别扇出：
+
+```sh
+x qr dec <img>   # zxing 先试，wxqr 兜底 —— 见 x-cmd/x-cmd#467
+```
