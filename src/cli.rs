@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::decode::{Decoded, DecodeOptions};
+use crate::decode::{DecodeOptions, Decoded};
 use crate::format::{emit_json, emit_tsv, emit_txt};
 
 pub const HELP: &str = "\
@@ -195,8 +195,8 @@ fn parse_dec(argv: &[String]) -> Result<DecArgs> {
     }
 
     if let Some(src) = args.files_from.take() {
-        let content = read_files_from(&src)
-            .with_context(|| format!("reading --files-from '{src}'"))?;
+        let content =
+            read_files_from(&src).with_context(|| format!("reading --files-from '{src}'"))?;
         for line in content.split(if args.null_sep { '\0' } else { '\n' }) {
             if line.is_empty() {
                 continue;

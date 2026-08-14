@@ -1,18 +1,17 @@
 # Build and test the wxqr binary on every push / PR.
 #
-# wxqr builds OpenCV from source via opencv-rust's contrib probe. That
-# is a 10-15 minute compile on cold cache. To keep CI under budget we:
-#   - cache the OpenCV source tree aggressively (the 1.5 GB build
-#     dir is the slowest thing on earth to rebuild)
-#   - ship only 4 platforms in v0.1 (linux-musl x86_64 + aarch64,
-#     macos x86_64 + aarch64); windows is in CI as
-#     continue-on-error and not released until v0.2.
-#   - keep one Linux gnu build for the `cargo test` job to avoid
-#     cross-compile noise around test execution.
+# Matrix: 4 targets shipped in v0.1 (linux-musl x86_64 + aarch64,
+# macos x86_64 + aarch64). Windows is `continue-on-error: true` and
+# tracked for v0.2 promotion.
+#
+# All cross-compile cases use `cargo-zigbuild` so the host x86_64
+# runner can produce aarch64 binaries without needing a separate
+# musl-cross / osxcross toolchain.
 #
 # All jobs that touch opencv-rust's build.rs need libclang + LLVM:
-#   - Linux: `apt install libclang-dev clang`
-#   - macOS: xcode-select --install (or `brew install llvm`)
+#   - Linux: `apt install libclang-dev clang libopencv-dev pkg-config`
+#   - macOS: `brew install llvm opencv@4 pkg-config`
+#     + LIBCLANG_PATH=/opt/homebrew/opt/llvm/lib
 
 name: build-and-test
 
@@ -28,7 +27,7 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.os }}, gnu)
+    name: test (${{ matrix.os }}, host)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -48,14 +47,9 @@ jobs:
         if: runner.os == 'macOS'
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
+          LIBCLANG_PATH: /opt/homebrew/opt/llvm/lib
         run: |
           brew install llvm opencv@4 pkg-config
-          # clang-sys searches for libclang.dylib; on macOS brew puts it
-          # at /opt/homebrew/opt/llvm/lib/libclang.dylib (Apple Silicon)
-          # which is not in dyld's default search path. Pointing
-          # LIBCLANG_PATH at the directory makes clang-sys skip the
-          # discovery dance.
-          echo "LIBCLANG_PATH=/opt/homebrew/opt/llvm/lib" >> $GITHUB_ENV
 
       - name: Cache OpenCV build dir
         uses: actions/cache@v4
@@ -88,25 +82,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            extra-deps: musl-tools,libclang-dev,clang
-            continue-on-error: false
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            extra-deps: musl-tools,aarch64-linux-gnu-gcc,libclang-dev,clang
-            continue-on-error: false
           - os: macos-13
             target: x86_64-apple-darwin
-            extra-deps: llvm
-            continue-on-error: false
           - os: macos-latest
             target: aarch64-apple-darwin
-            extra-deps: llvm
-            continue-on-error: false
           # v0.1 ships only 4 targets; windows tracked here as
           # continue-on-error for v0.2 promotion.
           - os: windows-latest
             target: x86_64-pc-windows-gnu
-            extra-deps: ""
             continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -114,18 +99,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compile deps (Linux)
-        if: matrix.extra-deps != '' && runner.os == 'Linux'
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.extra-deps }} libopencv-dev pkg-config
+          sudo apt-get install -y libclang-dev clang libopencv-dev pkg-config
 
-      - name: Install cross-compile deps (macOS)
-        if: matrix.extra-deps != '' && runner.os == 'macOS'
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           LIBCLANG_PATH: /opt/homebrew/opt/llvm/lib
-        run: brew install ${{ matrix.extra-deps }}
+        run: brew install llvm opencv@4 pkg-config
 
       - name: Cache OpenCV build dir (THIS IS THE BIG ONE)
         uses: actions/cache@v4
@@ -140,18 +125,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }} --locked
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Build release (cargo-zigbuild for cross, cargo build for native host)
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            cargo build --release --target ${{ matrix.target }} --locked --features="opencv/wechat_qrcode"
+          else
+            cargo zigbuild --release --target ${{ matrix.target }} --locked --features="opencv/wechat_qrcode"
+          fi
 
       - name: Smoke test
         shell: bash
         run: |
           set -e
-          EXT=""
-          if [[ "${{ matrix.os }}" == windows* ]]; then
-            EXT=".exe"
-          fi
-          BIN="target/${{ matrix.target }}/release/wxqr$EXT"
+          BIN="target/${{ matrix.target }}/release/wxqr"
+          [ -f "$BIN.exe" ] && BIN="$BIN.exe"
           "$BIN" --version
           # The bundled models must exist; fail fast if they were
           # accidentally not committed.
