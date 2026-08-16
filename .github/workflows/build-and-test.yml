@@ -52,7 +52,7 @@ jobs:
           brew install llvm opencv@4 pkg-config
 
       - name: Cache OpenCV build dir
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/src/**/opencv-*
@@ -113,7 +113,7 @@ jobs:
         run: brew install llvm opencv@4 pkg-config
 
       - name: Cache OpenCV build dir (THIS IS THE BIG ONE)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/src/**/opencv-*
