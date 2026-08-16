@@ -125,8 +125,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-zigbuild
-        run: cargo install --locked cargo-zigbuild
+      - name: Install cargo-zigbuild + zig
+        run: |
+          cargo install --locked cargo-zigbuild
+          # cargo-zigbuild needs the `zig` binary in PATH. Pre-installed
+          # only on macos-14+ arm64 runners as of 2026; install it
+          # ourselves for the rest.
+          if ! command -v zig >/dev/null 2>&1; then
+            if [ "${{ runner.os }}" = "Linux" ]; then
+              sudo apt-get install -y zig
+            else
+              brew install zig
+            fi
+          fi
 
       - name: Build release (cargo-zigbuild for cross, cargo build for native host)
         run: |
