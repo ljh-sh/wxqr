@@ -32,7 +32,7 @@ path = "src/main.rs"
 # OpenCV with contrib modules. `wechat_qrcode` is the reason this project
 # exists; the rest of the contrib is disabled to keep build time short.
 # (`core` is always on — it is not a feature flag in opencv-rust.)
-opencv = { version = "0.100", default-features = false, features = [
+opencv = { version = "0.101", default-features = false, features = [
     "imgcodecs",
     "imgproc",
     "dnn",
